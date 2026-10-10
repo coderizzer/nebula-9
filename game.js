@@ -1,5 +1,15 @@
 'use strict';
+/*
+ * NEBULA//9 — a vertical arcade space shooter.
+ * Single file, no dependencies. Canvas 2D rendering, Web Audio synthesis.
+ *
+ * Sections (in order): palette · config · waves · utils · input · audio · effects ·
+ * bullets · power-ups · player · enemies · world (rules, scoring, HUD) · UI · game
+ * (state machine) · bootstrap (canvas sizing, touch controls, main loop).
+ * Logical resolution is fixed at 480x720; the canvas is scaled to fit any screen.
+ */
 
+/* ─── palette ─────────────────────────────────────────────────────────── */
 const P = {
   void:   '#06070f',
   cold:   '#e8f0f7',
@@ -141,7 +151,7 @@ function withGlow(g,glowCol,blur,fn){
 
 /* ─── input ───────────────────────────────────────────────────────────── */
 const Input=(()=>{
-  const down=new Set(),pressed=new Set(), T={x:0,y:0,fire:false,on:false};
+  const down=new Set(),pressed=new Set(), T={x:0,y:0,fire:false,on:false}, PAD={x:0,y:0,fire:false};
   const PREVENT=['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'];
   addEventListener('keydown',e=>{
     T.on=false;
@@ -151,7 +161,7 @@ const Input=(()=>{
   });
   addEventListener('keyup',e=>down.delete(e.code));
   addEventListener('blur',()=>down.clear());
-  return{ held:(...c)=>c.some(k=>down.has(k))||(T.fire&&c.includes('Space')), touch:T, hit:(...c)=>c.some(k=>pressed.has(k)), endStep:()=>pressed.clear() };
+  return{ held:(...c)=>c.some(k=>down.has(k))||((T.fire||PAD.fire)&&c.includes('Space')), touch:T, pad:PAD, press:c=>pressed.add(c), hit:(...c)=>c.some(k=>pressed.has(k)), endStep:()=>pressed.clear() };
 })();
 
 /* ─── audio ───────────────────────────────────────────────────────────── */
@@ -251,6 +261,7 @@ const Sfx=(()=>{
       lpf.frequency.setTargetAtTime(m==='pause'?450:m==='menu'?3500:16000,n,0.15);
       modeG.gain.setTargetAtTime(m==='over'?0:m==='pause'?0.55:1,n,m==='over'?0.9:0.15);
     },
+    note(m){ say(m); },
     toggleMusic(){S.music=!S.music;apply();save();say('MUSIC '+(S.music?'ON':'OFF'));},
     toggleSfx(){S.sfx=!S.sfx;apply();save();say('SFX '+(S.sfx?'ON':'OFF'));if(S.sfx)this.ui('tick');},
     vol(d){S.master=clamp(Math.round((S.master+d)*10)/10,0,1);apply();save();say('VOLUME '+Math.round(S.master*100)+'%');this.ui('tick');},
@@ -469,8 +480,8 @@ class Player{
     });
   }
   update(dt,world){
-    const ax=clamp((Input.held('ArrowRight','KeyD')?1:0)-(Input.held('ArrowLeft','KeyA')?1:0)+Input.touch.x,-1,1);
-    const ay=clamp((Input.held('ArrowDown', 'KeyS')?1:0)-(Input.held('ArrowUp',  'KeyW')?1:0)+Input.touch.y,-1,1);
+    const ax=clamp((Input.held('ArrowRight','KeyD')?1:0)-(Input.held('ArrowLeft','KeyA')?1:0)+Input.touch.x+Input.pad.x,-1,1);
+    const ay=clamp((Input.held('ArrowDown', 'KeyS')?1:0)-(Input.held('ArrowUp',  'KeyW')?1:0)+Input.touch.y+Input.pad.y,-1,1);
     this.vx=expDecay(this.vx,ax*CFG.speed,18,dt);
     this.vy=expDecay(this.vy,ay*CFG.speed,18,dt);
     this.x=clamp(this.x+this.vx*dt,22,W-22);
@@ -1051,9 +1062,10 @@ const UI={
     const mk=(a,y0,st=52,w=232,h=42)=>a.map((r,i)=>({id:r[0],label:r[1],primary:!!r[2],x:(W-w)/2,y:y0+i*st,w,h}));
     switch(key){
       case 'menu':     return mk([['play','PLAY',1],['how','HOW TO PLAY'],['scores','HIGH SCORE'],['settings','SETTINGS']],382);
-      case 'how': case 'scores': return mk([['back','BACK']],616);
+      case 'how': return mk([['back','BACK']],616);
+      case 'scores':   return Game.board.length?mk([['clear',Game.clearArm?'CONFIRM CLEAR':'CLEAR SCORES'],['back','BACK']],548):mk([['back','BACK']],616);
       case 'settings': return mk([['music','MUSIC   '+(Sfx.music?'ON':'OFF')],['sfx','SFX   '+(Sfx.sfx?'ON':'OFF')],
-                        ['vol','VOLUME   ◂  '+Sfx.volume+'%  ▸'],['back','BACK']],290);
+                        ['vol','VOLUME   ◂  '+Sfx.volume+'%  ▸']].concat(FS.ok?[['fs','FULLSCREEN   '+(FS.on?'ON':'OFF')]]:[],[['back','BACK']]),290);
       case 'pause':    return mk([['resume','RESUME',1],['restart','RESTART'],['settings','SETTINGS'],['menu','MAIN MENU']],296);
       case 'over':     return mk([['restart','RESTART',1],['menu','MAIN MENU']],486);
       case 'play':     return [{id:'pause',x:W/2+56,y:14,w:26,h:26}];
@@ -1070,6 +1082,11 @@ const UI={
       case 'pause': Sfx.ui('pause'); G.state='pause'; break;
       case 'music': Sfx.toggleMusic(); break;
       case 'sfx': Sfx.toggleSfx(); break;
+      case 'fs': FS.toggle(); Sfx.ui('tick'); break;
+      case 'clear':
+        if(!G.clearArm){ G.clearArm=true; Sfx.ui('tick'); }
+        else{ G.board=[]; G.hi=G.hiWave=G.hiCombo=0; G.clearArm=false; G.saveRecords(); Sfx.ui('back'); this.sel=0; }
+        break;
       case 'vol': Sfx.vol(dir===0?(Sfx.volume>=100?-1:0.1):dir*0.1); break;
     }
   },
@@ -1083,10 +1100,13 @@ const UI={
 
 /* ─── game: state machine, screens, transitions ───────────────────────── */
 const Game={
-  state:'menu', sub:null, hiWave:0, hiCombo:0, newBest:false, world:null, stars:new Starfield(), time:0, hi:0,
+  state:'menu', sub:null, board:[], rank:0, lastEntry:null, clearArm:false, hiWave:0, hiCombo:0, newBest:false, world:null, stars:new Starfield(), time:0, hi:0,
   fadeAlpha:1, fadeDir:-1, _pendingState:null,
 
-  init(){ try{ this.hi=+localStorage.getItem('n9-hi')||0; const b=JSON.parse(localStorage.getItem('n9-best')||'{}'); this.hiWave=b.w||0; this.hiCombo=b.c||0; }catch(e){} },
+  init(){ try{ this.hi=+localStorage.getItem('n9-hi')||0; const b=JSON.parse(localStorage.getItem('n9-best')||'{}'); this.hiWave=b.w||0; this.hiCombo=b.c||0;
+      const raw=JSON.parse(localStorage.getItem('n9-scores')||'[]');
+      this.board=(Array.isArray(raw)?raw:[]).filter(e=>e&&Number.isFinite(e.s)&&e.s>0).slice(0,10);
+    }catch(e){ this.board=[]; } },
 
   _fadeTo(ns){
     if(this._pendingState)return;
@@ -1094,16 +1114,27 @@ const Game={
   },
   start(){ Sfx.init(); this.world=new World(); this.state='play'; },
   end(){
-    const w=this.world; this.state='over'; announce('Game over. Score '+w.score+', wave '+w.wave+'.');
+    const w=this.world; this.state='over';
+    announce('Game over. Score '+w.score+', wave '+w.wave+'.');
     this.newBest=w.score>0&&w.score>this.hi;
     if(w.score>this.hi) this.hi=w.score;
     this.hiWave=Math.max(this.hiWave,w.wave); this.hiCombo=Math.max(this.hiCombo,w.bestCombo);
-    try{ localStorage.setItem('n9-hi',this.hi); localStorage.setItem('n9-best',JSON.stringify({w:this.hiWave,c:this.hiCombo})); }catch(e){}
+    this.rank=0; this.lastEntry=null;
+    if(w.score>0){                                   // local top-10, kept sorted, ties keep the older run first
+      const e={s:w.score,w:w.wave,c:w.bestCombo,d:new Date().toISOString().slice(0,10)};
+      this.board.push(e); this.board.sort((x,y)=>y.s-x.s); this.board.length=Math.min(this.board.length,10);
+      const i=this.board.indexOf(e); if(i>=0){ this.rank=i+1; this.lastEntry=e; }
+    }
+    this.saveRecords();
+  },
+  saveRecords(){
+    try{ localStorage.setItem('n9-hi',this.hi); localStorage.setItem('n9-best',JSON.stringify({w:this.hiWave,c:this.hiCombo}));
+         localStorage.setItem('n9-scores',JSON.stringify(this.board)); }catch(e){}
   },
   screen(){ return this.state==='play'?'play':(this.sub&&(this.state==='menu'||this.state==='pause'))?this.sub:this.state; },
   _ui(dt){
     const key=this.screen(), L=UI.layout(key);
-    if(key!==UI.key){ UI.key=key; UI.t=0; UI.sel=key==='play'?-1:0; UI.down=-1; }
+    if(key!==UI.key){ this.clearArm=false; UI.key=key; UI.t=0; UI.sel=key==='play'?-1:0; UI.down=-1; }
     UI.t+=dt; UI.pressT=Math.max(0,UI.pressT-dt);
     if(!this._pendingState&&key!=='play'&&UI.t>0.15){
       const n=L.length, cur=L[UI.sel];
@@ -1146,20 +1177,28 @@ const Game={
     if(key==='menu'){
       g.globalAlpha=ap(0); this._heroShip(g,W/2,128+Math.sin(this.time*1.4)*4,2.2); g.globalAlpha=1;
       T('NEBULA',W/2,232,46,P.cold,'center','700',1); T('//9',W/2,292,60,P.ember,'center','700',2); rule(310,3);
-      hint('↑ ↓  SELECT     ENTER  CONFIRM     M  MUSIC     N  SFX');
+      hint('↑ ↓  SELECT  ·  ENTER  CONFIRM  ·  M  MUSIC  ·  N  SFX'+(FS.ok?'  ·  F  FULL':''));
     } else if(key==='how'){
       T('HOW TO PLAY',W/2,150,22,P.cold,'center','700'); rule(166,1);
-      (Input.touch.on?[['MOVE','LEFT THUMB'],['FIRE','RIGHT THUMB'],['PAUSE','TOP BUTTON'],['SOUND','SETTINGS']]:[['MOVE','WASD / ARROWS'],['FIRE','SPACE'],['PAUSE','P / ESC'],['MUSIC · SFX','M · N']]).forEach((r,i)=>{
-        T(r[0],W/2-120,214+i*28,12,P.steel,'left','500',2+i); T(r[1],W/2+120,214+i*28,12,P.cold,'right','600',2+i); });
+      (Input.touch.on?[['MOVE','LEFT THUMB'],['FIRE','RIGHT THUMB'],['PAUSE','TOP BUTTON'],['SOUND','SETTINGS']]:[['MOVE','WASD / ARROWS'],['FIRE','SPACE'],['PAUSE','P / ESC'],['MUSIC · SFX','M · N']].concat(FS.ok?[['FULLSCREEN','F']]:[],[['GAMEPAD','STICK · A · START']])).forEach((r,i)=>{
+        T(r[0],W/2-120,214+i*24,12,P.steel,'left','500',2+i); T(r[1],W/2+120,214+i*24,12,P.cold,'right','600',2+i); });
       rule(342,5);
       ['Chain kills to build a x2 to x8 multiplier.','Graze enemy fire to keep the combo alive.','Take a hit and the combo resets.'].forEach((s,i)=>T(s,W/2,372+i*22,12,P.steel,'center','500',6+i));
       ['rapid','triple','shield','health'].forEach((k,i)=>{ const x=W/2-135+i*90,a=ap(9+i); g.globalAlpha=a; g.save(); g.translate(x,468); glyph(g,k,PW[k].col,9); g.restore(); g.globalAlpha=1; T(PW[k].name,x,496,10,PW[k].col,'center','600',9+i); });
       T('Power-ups are temporary.',W/2,540,11,P.steel,'center','500',13);
     } else if(key==='scores'){
-      T('HIGH SCORE',W/2,150,22,P.cold,'center','700'); rule(166,1);
-      T(String(this.hi).padStart(7,'0'),W/2,272,52,P.gold,'center','700',2); T('SCORE',W/2,296,11,P.steel,'center','500',2);
-      T(String(this.hiWave),W/2-90,396,28,P.cold,'center','700',3); T('BEST WAVE',W/2-90,418,11,P.steel,'center','500',3);
-      T(String(this.hiCombo),W/2+90,396,28,P.cold,'center','700',4); T('BEST COMBO',W/2+90,418,11,P.steel,'center','500',4);
+      T('HIGH SCORES',W/2,150,22,P.cold,'center','700'); rule(166,1);
+      if(!this.board.length) T('NO SCORES YET.  PLAY A RUN.',W/2,300,12,P.steel,'center','500',2);
+      else{
+        T('#',56,206,11,P.steel,'left','500',2); T('SCORE',176,206,11,P.steel,'right','500',2); T('WAVE',204,206,11,P.steel,'left','500',2);
+        T('COMBO',272,206,11,P.steel,'left','500',2); T('DATE',W-56,206,11,P.steel,'right','500',2);
+        this.board.forEach((e,i)=>{
+          const me=e===this.lastEntry, c=me?P.goldGl:(i===0?P.gold:P.cold), y=234+i*28, n=3+i*0.4;
+          if(me){ g.globalAlpha=0.12*ap(2); g.fillStyle=P.gold; g.fillRect(40,y-17,W-80,24); g.globalAlpha=1; }
+          T(String(i+1),56,y,12,c,'left','600',n); T(String(e.s).padStart(7,'0'),176,y,13,c,'right','700',n);
+          T(String(e.w),204,y,12,c,'left','600',n); T('x'+e.c,272,y,12,c,'left','600',n); T(e.d,W-56,y,11,P.steel,'right','500',n);
+        });
+      }
     } else if(key==='settings'){
       T('SETTINGS',W/2,230,22,P.cold,'center','700'); rule(246,1); hint('← →  VOLUME     ESC  BACK');
     } else if(key==='pause'){
@@ -1170,7 +1209,7 @@ const Game={
       const sc=Math.round(this.world.score*ease((t-0.3)/1.1));
       T('MISSION FAILED',W/2,150,14,P.ember,'center','700',0); rule(166,1);
       T(String(sc).padStart(7,'0'),W/2,236,52,P.cold,'center','700',1); T('FINAL SCORE',W/2,258,11,P.steel,'center','500',1);
-      if(this.newBest&&t>1.2){ g.globalAlpha=0.6+0.4*Math.sin(t*6); txt(g,'↑  NEW HIGH SCORE',W/2,288,12,P.goldGl,'center','700'); g.globalAlpha=1; }
+      if(this.rank&&t>1.2){ g.globalAlpha=0.6+0.4*Math.sin(t*6); txt(g,this.newBest?'↑  NEW HIGH SCORE':'↑  LEADERBOARD  #'+this.rank,W/2,288,12,P.goldGl,'center','700'); g.globalAlpha=1; }
       rule(312,3);
       [[this.hi,'HIGH SCORE',P.gold],[this.world.wave,'WAVE',P.cold],[this.world.bestCombo,'BEST COMBO',P.cold]].forEach((c,i)=>{
         T(String(c[0]),W/2-130+i*130,372,22,c[2],'center','700',4+i); T(c[1],W/2-130+i*130,394,11,P.steel,'center','500',4+i); });
@@ -1182,6 +1221,7 @@ const Game={
 
   update(dt){
     this.time+=dt;
+    if(Input.hit('KeyF')&&FS.ok) FS.toggle();
     if(Input.hit('KeyM')) Sfx.toggleMusic();
     if(Input.hit('KeyN')) Sfx.toggleSfx();
     if(Input.hit('Minus','NumpadSubtract')) Sfx.vol(-0.1);
@@ -1248,6 +1288,45 @@ const Game={
 const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 if(!ctx){ const d=document.createElement('div'); d.id='fatal'; d.textContent='This browser does not support HTML5 Canvas, which NEBULA//9 requires.'; document.body.appendChild(d); throw new Error('Canvas 2D unavailable'); }
 addEventListener('pointerdown',()=>window.focus());
+/* ─── Fullscreen API ──────────────────────────────────────────────────── */
+const FS={
+  get ok(){ return !!(document.fullscreenEnabled||document.webkitFullscreenEnabled); },
+  get on(){ return !!(document.fullscreenElement||document.webkitFullscreenElement); },
+  toggle(){
+    try{
+      const d=document, el=d.documentElement;
+      const r=this.on?(d.exitFullscreen||d.webkitExitFullscreen).call(d):(el.requestFullscreen||el.webkitRequestFullscreen).call(el);
+      if(r&&r.catch) r.catch(()=>{});            // denied (e.g. inside an iframe): ignore
+    }catch(e){}
+  },
+};
+['fullscreenchange','webkitfullscreenchange'].forEach(t=>document.addEventListener(t,()=>resize()));
+
+/* ─── Gamepad API: polled once per frame, mapped onto the same Input the keyboard uses ── */
+const Pad={
+  active:false, prev:{},
+  poll(){
+    const list=navigator.getGamepads?navigator.getGamepads():[]; let gp=null;
+    for(let i=0;i<list.length;i++){ if(list[i]&&list[i].connected){ gp=list[i]; break; } }
+    const out=Input.pad;
+    if(!gp){ out.x=out.y=0; out.fire=false; this.active=false; return; }
+    const b=i=>!!(gp.buttons[i]&&gp.buttons[i].pressed);
+    let x=gp.axes[0]||0, y=gp.axes[1]||0; const m=Math.hypot(x,y), dz=0.2;
+    const cur={A:b(0),B:b(1),St:b(9),u:b(12)||y<-0.6,d:b(13)||y>0.6,l:b(14)||x<-0.6,r:b(15)||x>0.6};
+    if(m<dz) x=y=0; else { const k=(m-dz)/(1-dz)/m; x*=k; y*=k; }
+    out.x=clamp(x+(b(15)?1:0)-(b(14)?1:0),-1,1); out.y=clamp(y+(b(13)?1:0)-(b(12)?1:0),-1,1);
+    out.fire=b(0)||b(5)||b(7);
+    const play=Game.state==='play';
+    for(const [k,code] of [['A','Enter'],['B','Escape'],['St','Escape'],['u','ArrowUp'],['d','ArrowDown'],['l','ArrowLeft'],['r','ArrowRight']]){
+      if(cur[k]&&!this.prev[k]&&!(play&&(k==='A'||k==='B'))) Input.press(code);   // edges drive menus and pause
+    }
+    if(m>0.3||Object.values(cur).some(Boolean)){ this.active=true; Input.touch.on=false; }
+    this.prev=cur;
+  },
+};
+addEventListener('gamepadconnected',()=>Sfx.note('CONTROLLER CONNECTED'));
+addEventListener('gamepaddisconnected',()=>{ Sfx.note('CONTROLLER DISCONNECTED'); if(Game.state==='play') Game.pause(); });
+
 function resize(){
   const cs=getComputedStyle(document.body), vv=window.visualViewport;
   const vw=(vv?vv.width:innerWidth)-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
@@ -1323,6 +1402,7 @@ function frame(ts){
   try{
     const raw=ts-last; last=ts; acc+=Math.min(0.1,raw/1000||0);
     let n=0;
+    Pad.poll();
     while(acc>=STEP){ Game.update(STEP); Input.endStep(); acc-=STEP; n++; }
     TouchCtl.sync();
     if(!n) return;                                  // 120/144 Hz displays: skip redundant draws

@@ -6,8 +6,8 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 <!-- ![NEBULA//9 gameplay](docs/gameplay.gif) -->
 
 ## Demo
-[
-- **Play online:** `https://coderizzer.github.io/nebula-9/` *(enable GitHub Pages on the `main` branch and update this link)*
+
+- **Play online:** `https://<your-username>.github.io/<repo-name>/` *(enable GitHub Pages on the `main` branch and update this link)*
 - **Run locally:** see [Installation](#installation).
 
 ## Features
@@ -21,6 +21,9 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 - **Complete UI flow:** menu, how to play, high score, settings, pause and game over, with keyboard, mouse and touch navigation.
 - **Desktop and mobile support:** keyboard controls, plus a floating analog stick and fire zone on touch devices.
 - **Accessibility basics:** keyboard-operable menus, a screen-reader status line for waves, pickups and game over, a visible focus ring, and reduced screen shake when `prefers-reduced-motion` is set.
+- **Local top-10 leaderboard** with score, wave, best combo and date, stored as JSON in `localStorage`, with a two-step clear.
+- **Fullscreen** (`F` or Settings) using the Fullscreen API, shown only where the browser supports it.
+- **Gamepad support** through the Gamepad API: analog stick or D-pad to move, `A`/bumpers/trigger to fire, `Start` to pause, and full menu navigation.
 - **Persistent settings and records:** volume, music/SFX toggles, high score, best wave and best combo are stored in `localStorage`.
 
 ## Controls
@@ -31,11 +34,14 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 | Fire | `Space` (hold) | Right half of the screen (hold) |
 | Pause | `Esc` or `P` | Pause button at the top |
 | Menu navigation | `↑` `↓` / `W` `S`, `Enter` or `Space` to confirm, `Esc` to go back | Tap |
+| Fullscreen | `F` | Settings menu (where supported) |
 | Music on/off | `M` | Settings menu |
 | SFX on/off | `N` | Settings menu |
 | Volume | `-` / `+` | Settings menu |
 
 The game also pauses automatically when the window loses focus or the tab is hidden.
+
+**Gamepad** (Xbox-style layout): left stick or D-pad to move and navigate menus, `A`, `RB` or `RT` to fire, `A` to confirm, `B` to go back, `Start` to pause. Press any button once so the browser detects the controller.
 
 ## Tech Stack
 
@@ -43,6 +49,7 @@ The game also pauses automatically when the window loses focus or the tab is hid
 - **Vanilla JavaScript (ES6+)**, no frameworks or libraries
 - **Web Audio API** for sound effects and music
 - **Pointer Events** for unified mouse and touch input
+- **Gamepad API** and **Fullscreen API** for controller input and fullscreen play
 - **CSS** only for layout, safe-area handling and the touch-control overlay
 - **`localStorage`** for settings and records
 
@@ -181,6 +188,8 @@ Audio starts after your first key press or tap, as required by browser autoplay 
 ## Known Limitations
 
 - The game has been checked with headless smoke tests, but it has not been tested across a broad matrix of devices and browsers. It targets current evergreen browsers (Chrome, Edge, Firefox, Safari) and relies on Pointer Events, Web Audio and `visualViewport`.
+- Fullscreen is unavailable where the browser blocks it (iPhone Safari, some embedded frames), and the setting is hidden there. The Gamepad API generally needs a secure context, so use GitHub Pages or `localhost` if a controller isn't detected. Gamepad support has been simulated in tests but not tried with physical controllers.
+- The leaderboard is local to one browser and stores no player names.
 - Landscape orientation on phones leaves a small playfield, since the game is designed for portrait.
 - There are no automated gameplay tests, and the single-file structure makes unit testing harder than it would be with modules.
 - Canvas UI text is not selectable and does not scale with browser text-size settings.
@@ -188,10 +197,9 @@ Audio starts after your first key press or tap, as required by browser autoplay 
 ## Future Improvements
 
 - Boss waves and enemy formation patterns
-- Persistent progression (unlocks, ship upgrades) and an online leaderboard
+- Persistent progression (unlocks, ship upgrades) and an online leaderboard (the current one is local only)
 - Difficulty settings
-- Gamepad support
-- Fullscreen toggle and a gameplay-focused landscape layout
+- A gameplay-focused landscape layout
 - Splitting the single file into ES modules with a lightweight bundler for easier testing
 - Unit tests for the wave generator, scoring and drop logic
 
