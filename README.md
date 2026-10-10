@@ -7,7 +7,7 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 
 ## Demo
 
-- **Play online:** `https://<your-username>.github.io/<repo-name>/` *(enable GitHub Pages on the `main` branch and update this link)*
+- **Play online:** `https://coderizzer.github.io/nebula-9/` *(enable GitHub Pages on the `main` branch and update this link)*
 - **Run locally:** see [Installation](#installation).
 
 ## Features
