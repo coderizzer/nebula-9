@@ -7,7 +7,7 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 
 ## Demo
 
-- **Play online:** `https://coderizzer.github.io/nebula-9/` *(enable GitHub Pages on the `main` branch and update this link)*
+- **Play online:** `https://<your-username>.github.io/<repo-name>/` *(enable GitHub Pages on the `main` branch and update this link)*
 - **Run locally:** see [Installation](#installation).
 
 ## Features
@@ -15,6 +15,7 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 - **Four enemy types** with distinct silhouettes, movement patterns and attack behaviours (scout, fighter, tank, elite).
 - **Wave progression** with a hand-authored opening (waves 1-6) followed by a threat-budget generator that scales indefinitely.
 - **Combo and multiplier system** with a graze mechanic that rewards close calls.
+- **Two local two-player modes** on one keyboard (desktop and laptop only), with a blue and a pink ship: **Co-op** (team up with shared lives, score and combo) and **Versus** (separate scores and lives, highest score wins).
 - **Four power-ups:** Rapid Fire, Triple Shot, Shield and Health, all time-limited or single-use.
 - **Procedural audio:** synthesized sound effects and a generative music track that gains layers as the waves get harder.
 - **Game-feel systems:** ship tilt, recoil spring, muzzle flashes, bullet trails, screen shake, damage vignette and fade transitions.
@@ -40,6 +41,15 @@ A vertical arcade space shooter built with HTML5 Canvas and vanilla JavaScript. 
 | Volume | `-` / `+` | Settings menu |
 
 The game also pauses automatically when the window loses focus or the tab is hidden.
+
+**Two players, same keyboard** (Co-op and Versus use the same controls):
+
+| | Player 1 (blue) | Player 2 (pink) |
+|---|---|---|
+| Move | `W` `A` `S` `D` | Arrow keys |
+| Fire | `Space` | `Enter` (or right `Shift`, or `/`) |
+
+In co-op mode a connected gamepad controls Player 2 as well. Co-op is hidden on phones and tablets.
 
 **Gamepad** (Xbox-style layout): left stick or D-pad to move and navigate menus, `A`, `RB` or `RT` to fire, `A` to confirm, `B` to go back, `Start` to pause. Press any button once so the browser detects the controller.
 
@@ -100,6 +110,14 @@ Enemy HP scales by 8% per wave and speed by 4% per wave (speed bonus capped at +
 - **Risk and reward:** taking a hit resets the combo. Grazing an enemy bullet (a near miss) refreshes the timer and awards bonus points, so staying close to danger pays off.
 - **Wave bonus:** clearing a wave awards `200 × wave`, plus 500 for a flawless wave. Every fifth wave also grants an extra life (maximum 5).
 - **Milestones:** score thresholds trigger on-screen feedback and a sound cue.
+
+### Two-player modes
+
+Both are chosen from the main menu and are hidden on phones and tablets. Enemy health is raised to compensate for the extra firepower (×1.5 in Co-op, ×1.25 in Versus).
+
+- **Co-op (team up):** both ships share one pool of 4 lives, one score and one combo, so a hit on either player resets the combo. The run ends when the shared lives run out. Runs are tagged `2P` on the leaderboard.
+- **Versus (1 v 1):** each pilot has their own lives (3), score, combo and flawless-wave bonus. Kills are credited to whoever fired the bullet, so you can steal a kill. The match ends as soon as one pilot loses their last life, and the higher score wins. Versus results are not saved to the leaderboard.
+- In both modes each ship has its own power-up timers and shield, and pickups go to whichever ship touches them. Enemies aim at the nearest living ship.
 
 ### Power-ups
 
@@ -190,6 +208,8 @@ Audio starts after your first key press or tap, as required by browser autoplay 
 - The game has been checked with headless smoke tests, but it has not been tested across a broad matrix of devices and browsers. It targets current evergreen browsers (Chrome, Edge, Firefox, Safari) and relies on Pointer Events, Web Audio and `visualViewport`.
 - Fullscreen is unavailable where the browser blocks it (iPhone Safari, some embedded frames), and the setting is hidden there. The Gamepad API generally needs a secure context, so use GitHub Pages or `localhost` if a controller isn't detected. Gamepad support has been simulated in tests but not tried with physical controllers.
 - The leaderboard is local to one browser and stores no player names.
+- Co-op needs two sets of keys on one keyboard. Some laptop keyboards cannot register every combination at once ("ghosting"), so if a ship stops firing while both players hold keys, use the alternative fire keys or a gamepad for Player 2.
+- Co-op is not available on touch devices.
 - Landscape orientation on phones leaves a small playfield, since the game is designed for portrait.
 - There are no automated gameplay tests, and the single-file structure makes unit testing harder than it would be with modules.
 - Canvas UI text is not selectable and does not scale with browser text-size settings.

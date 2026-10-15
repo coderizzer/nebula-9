@@ -15,7 +15,7 @@ const P = {
   cold:   '#e8f0f7',
   steel:  '#8fa8c4',
   blue:   '#3a7bd5',
-  blueGl: '#6fa3ff',
+  blueGl: '#6fa3ff', pink:'#e0559a', pinkGl:'#ff8cc6',
   ember:  '#c84b31',
   emberGl:'#f07050',
   gold:   '#c9a84c',
@@ -132,6 +132,7 @@ function compact(a,pool){            // in-place removal of dead objects; recycl
 }
 const LIVE=document.getElementById('live');
 const announce=m=>{ if(LIVE) LIVE.textContent=m; };          // screen-reader status line
+const COARSE=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches&&!matchMedia('(any-pointer:fine)').matches);  // phones/tablets: no co-op
 const RM=!!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
 const rand     = (a,b) => a+Math.random()*(b-a);
 const clamp    = (v,a,b) => Math.min(b,Math.max(a,v));
@@ -161,7 +162,7 @@ const Input=(()=>{
   });
   addEventListener('keyup',e=>down.delete(e.code));
   addEventListener('blur',()=>down.clear());
-  return{ held:(...c)=>c.some(k=>down.has(k))||((T.fire||PAD.fire)&&c.includes('Space')), touch:T, pad:PAD, press:c=>pressed.add(c), hit:(...c)=>c.some(k=>pressed.has(k)), endStep:()=>pressed.clear() };
+  return{ held:(...c)=>c.some(k=>down.has(k))||((T.fire||PAD.fire)&&c.includes('Space')), touch:T, pad:PAD, press:c=>pressed.add(c), key:(...c)=>c.some(k=>down.has(k)), hit:(...c)=>c.some(k=>pressed.has(k)), endStep:()=>pressed.clear() };
 })();
 
 /* ─── audio ───────────────────────────────────────────────────────────── */
@@ -451,7 +452,7 @@ class Powerup{
   update(dt,world){
     this.t+=dt; this.y+=72*dt;
     if(this.y>H+24){this.dead=true;return;}
-    if(!world.player.dead&&hit(this,world.player)) world.collect(this);
+    for(const p of world.players) if(!p.dead&&hit(this,p)){ world.collect(this,p); break; }
   }
   draw(g){
     const by=this.y+Math.sin(this.t*4)*3, pulse=0.5+0.5*Math.sin(this.t*6);
@@ -471,17 +472,29 @@ class Powerup{
 
 /* ─── player ──────────────────────────────────────────────────────────── */
 class Player{
-  constructor(){
+  constructor(id=0,coop=false){
     Object.assign(this,{
-      x:W/2, y:H-90, vx:0, vy:0, r:12,
+      id, coop, score:0, lives:CFG.lives, combo:0, comboT:0, mult:1, bestCombo:0, flawless:true,   // per-pilot stats (VS mode)
+      col:id?P.pink:P.blue, glow:id?P.pinkGl:P.blueGl, canopy:id?'rgba(255,215,235,0.55)':'rgba(200,230,255,0.55)',
+      x:coop?W/2+(id?60:-60):W/2, y:H-90, vx:0, vy:0, r:12,
       cool:0, inv:CFG.invuln, dead:false,
       tilt:0, recoilY:0, recoilV:0,
       _ax:0, _ay:0, _firing:false, pw:{rapid:0,triple:0,shield:0},
     });
   }
   update(dt,world){
-    const ax=clamp((Input.held('ArrowRight','KeyD')?1:0)-(Input.held('ArrowLeft','KeyA')?1:0)+Input.touch.x+Input.pad.x,-1,1);
-    const ay=clamp((Input.held('ArrowDown', 'KeyS')?1:0)-(Input.held('ArrowUp',  'KeyW')?1:0)+Input.touch.y+Input.pad.y,-1,1);
+    const k=(...c)=>Input.key(...c)?1:0;
+    let ax,ay,firing;
+    if(!this.coop){            // single player: every input source drives the one ship
+      ax=clamp(k('ArrowRight','KeyD')-k('ArrowLeft','KeyA')+Input.touch.x+Input.pad.x,-1,1);
+      ay=clamp(k('ArrowDown','KeyS')-k('ArrowUp','KeyW')+Input.touch.y+Input.pad.y,-1,1);
+      firing=Input.held('Space');
+    } else if(this.id===0){    // co-op player 1 (blue): WASD + Space
+      ax=k('KeyD')-k('KeyA'); ay=k('KeyS')-k('KeyW'); firing=Input.key('Space');
+    } else {                   // co-op player 2 (pink): arrows + Enter, and the gamepad
+      ax=clamp(k('ArrowRight')-k('ArrowLeft')+Input.pad.x,-1,1); ay=clamp(k('ArrowDown')-k('ArrowUp')+Input.pad.y,-1,1);
+      firing=Input.key('Enter','NumpadEnter','ShiftRight','Slash')||Input.pad.fire;
+    }
     this.vx=expDecay(this.vx,ax*CFG.speed,18,dt);
     this.vy=expDecay(this.vy,ay*CFG.speed,18,dt);
     this.x=clamp(this.x+this.vx*dt,22,W-22);
@@ -492,16 +505,16 @@ class Player{
     this.recoilY+=this.recoilV*dt;
     this.recoilY=clamp(this.recoilY,-8,2);
     this.cool-=dt; this.inv=Math.max(0,this.inv-dt);
-    const firing=Input.held('Space');
     if(firing&&this.cool<=0){
       this.cool=CFG.fireDelay*(this.pw.rapid>0?0.55:1);
       const lx=this.x-10,rx=this.x+10,fy=this.y-6,S=CFG.bulletSpeed;
+      const mk=(x,y,vx,vy)=>{ const b=new Bullet(x,y,vx,vy,'player'); b.owner=this.id; return b; };   // owner = who gets the kill
       if(this.pw.triple>0){   // 3-way fan from the nose
         const ny=this.y-20;
-        world.bullets.push(new Bullet(this.x,ny,0,-S,'player'),new Bullet(this.x,ny,-S*0.17,-S*0.985,'player'),new Bullet(this.x,ny,S*0.17,-S*0.985,'player'));
+        world.bullets.push(mk(this.x,ny,0,-S),mk(this.x,ny,-S*0.17,-S*0.985),mk(this.x,ny,S*0.17,-S*0.985));
         world.flashes.push(new MuzzleFlash(this.x,ny));
       } else {
-        world.bullets.push(new Bullet(lx,fy,0,-S,'player'),new Bullet(rx,fy,0,-S,'player'));
+        world.bullets.push(mk(lx,fy,0,-S),mk(rx,fy,0,-S));
         world.flashes.push(new MuzzleFlash(lx,fy),new MuzzleFlash(rx,fy));
       }
       this.recoilV+=10; Sfx.shoot();
@@ -520,13 +533,13 @@ class Player{
     grad.addColorStop(1,'rgba(160,50,10,0)');
     g.fillStyle=grad; g.beginPath(); g.moveTo(-5,10); g.lineTo(0,8+fl); g.lineTo(5,10); g.fill();
     g.fillStyle='rgba(255,220,140,0.9)'; g.beginPath(); g.moveTo(-2.5,10); g.lineTo(0,10+fl*0.45); g.lineTo(2.5,10); g.fill();
-    withGlow(g,P.blueGl,12,()=>{
-      g.fillStyle=P.blue; g.beginPath();
+    withGlow(g,this.glow,12,()=>{
+      g.fillStyle=this.col; g.beginPath();
       g.moveTo(0,-22); g.lineTo(13,10); g.lineTo(6,6); g.lineTo(0,9); g.lineTo(-6,6); g.lineTo(-13,10);
       g.closePath(); g.fill();
     });
-    g.fillStyle='rgba(200,230,255,0.55)'; g.beginPath(); g.moveTo(0,-12); g.lineTo(3,0); g.lineTo(-3,0); g.closePath(); g.fill();
-    g.strokeStyle=P.blueGl; g.lineWidth=0.8; g.globalAlpha=0.6;
+    g.fillStyle=this.canopy; g.beginPath(); g.moveTo(0,-12); g.lineTo(3,0); g.lineTo(-3,0); g.closePath(); g.fill();
+    g.strokeStyle=this.glow; g.lineWidth=0.8; g.globalAlpha=0.6;
     g.beginPath(); g.moveTo(6,6); g.lineTo(12,9); g.stroke();
     g.beginPath(); g.moveTo(-6,6); g.lineTo(-12,9); g.stroke();
     g.globalAlpha=1; g.restore();
@@ -620,7 +633,7 @@ class Enemy{
 
   fireBullets(world){
     const ebs=world.enemyBullets;
-    const pl=world.player;
+    const pl=world.nearest(this.x,this.y);
     const dx=pl.x-this.x, dy=pl.y-this.y, l=Math.hypot(dx,dy)||1;
     const spd=220+(this.wave-1)*4;
 
@@ -645,13 +658,13 @@ class Enemy{
 
   updateFire(dt,world){
     if(this.bulletType==='none') return;
-    if(this.y<0||this.y>H*0.7||world.player.dead) return;
+    if(this.y<0||this.y>H*0.7||world.allDead()) return;
 
     // burst shots
     if(this.burstLeft>0){
       this.burstCool-=dt;
       if(this.burstCool<=0){
-        const pl=world.player;
+        const pl=world.nearest(this.x,this.y);
         const dx=pl.x-this.x,dy=pl.y-this.y,l=Math.hypot(dx,dy)||1;
         const spd=260+(this.wave-1)*5;
         world.enemyBullets.push(new Bullet(this.x,this.y+this.r,dx/l*spd,dy/l*spd,'burst'));
@@ -806,11 +819,12 @@ class Enemy{
 
 /* ─── world ───────────────────────────────────────────────────────────── */
 class World{
-  constructor(){
+  constructor(mode='solo'){          // 'solo' | 'coop' (team) | 'vs'
+    const two=mode!=='solo';
     Object.assign(this,{
-      player:new Player(),
+      mode, two, coop:mode==='coop', vs:mode==='vs', players:two?[new Player(0,true),new Player(1,true)]:[new Player(0,false)],
       bullets:[], enemyBullets:[], enemies:[], particles:[], sparks:[], flashes:[], pops:[],
-      score:0, lives:CFG.lives,
+      score:0, lives:mode==='coop'?4:CFG.lives,         // co-op shares one pool of lives
       wave:0, queue:[], spawnT:0, gap:1.5,
       banner:0, bannerWave:0,
       shake:0,
@@ -826,7 +840,7 @@ class World{
     this.spawnT=0.8;
     this.banner=2.4; this.bannerWave=this.wave;
     this.bannerSub=WAVE_TAG[this.wave]||(this.wave%5===0?'MILESTONE WAVE  -  BONUS LIFE AT CLEAR':'HOSTILES: '+this.queue.length);
-    this.cleared=false; this.flawless=true; announce('Wave '+this.wave+'. '+this.bannerSub);
+    this.cleared=false; this.flawless=true; for(const p of this.players) p.flawless=true; announce('Wave '+this.wave+'. '+this.bannerSub);
     Sfx.wave(); Sfx.mode('play',this.wave);
   }
 
@@ -837,10 +851,19 @@ class World{
 
   waveCleared(){
     this.cleared=true;
-    let b=200*this.wave, msg='WAVE CLEARED  +'+b;
-    if(this.flawless){ b+=500; msg='FLAWLESS  +'+b; }
-    this.score+=b; this.toast(msg);
-    if(this.wave%5===0 && this.lives<5){ this.lives++; this.toast('BONUS LIFE',P.blueGl); setTimeout(()=>Sfx.heal(),250); }
+    if(this.vs){
+      const fl=this.players.filter(p=>p.flawless&&!p.dead);
+      for(const p of fl) p.score+=500;
+      this.toast(fl.length?'FLAWLESS  '+fl.map(p=>'P'+(p.id+1)).join(' + ')+'  +500':'WAVE CLEARED');
+    } else {
+      let b=200*this.wave, msg='WAVE CLEARED  +'+b;
+      if(this.flawless){ b+=500; msg='FLAWLESS  +'+b; }
+      this.score+=b; this.toast(msg);
+    }
+    if(this.wave%5===0){
+      let any=false; for(const S of this.vs?this.players:[this]) if(S.lives<5){ S.lives++; any=true; }
+      if(any){ this.toast('BONUS LIFE',P.blueGl); setTimeout(()=>Sfx.heal(),250); }
+    }
     Sfx.clear();
   }
 
@@ -851,7 +874,7 @@ class World{
         // spawn interval tightens with waves, floor at 0.28s
         this.spawnT=Math.max(0.3, 1.25-this.wave*0.07);
         const type=this.queue.pop();
-        this.enemies.push(new Enemy(type,rand(38,W-38),this.wave));
+        { const e=new Enemy(type,rand(38,W-38),this.wave); if(this.two){ const f=this.coop?1.5:1.25; e.hp=e.maxHp=Math.ceil(e.hp*f); } this.enemies.push(e); }
       }
     } else if(!this.enemies.length){
       if(this.wave>0&&!this.cleared) this.waveCleared();
@@ -867,16 +890,17 @@ class World{
     for(let i=0;i<n&&this.sparks.length<FX.sCap;i++){ const o=POOL.s.pop(); if(o){o.init(x,y,col);this.sparks.push(o);} else this.sparks.push(new Spark(x,y,col)); }
   }
 
-  kill(e){
+  kill(e,p){
     e.dead=true;
-    this.combo++; this.comboT=COMBO_WIN; this.bestCombo=Math.max(this.bestCombo,this.combo);
-    const nm=Math.min(MAX_MULT,1+Math.floor(this.combo/5));
-    if(nm>this.mult) this.toast('x'+nm+' MULTIPLIER',P.goldGl);
-    this.mult=nm;
-    const pts=e.score*this.mult; this.score+=pts;
+    const S=(this.vs&&p)?p:this;       // VS: each pilot has their own score and combo
+    S.combo++; S.comboT=COMBO_WIN; S.bestCombo=Math.max(S.bestCombo,S.combo);
+    const nm=Math.min(MAX_MULT,1+Math.floor(S.combo/5));
+    if(nm>S.mult) this.toast((this.vs?this.tag(p):'')+'x'+nm+' MULTIPLIER',this.vs?p.glow:P.goldGl);
+    S.mult=nm;
+    const pts=e.score*S.mult; S.score+=pts;
     this.pops.push(new ScorePop(e.x,e.y-e.r-8,pts));
     this.maybeDrop(e);
-    while(this.ms<MILESTONES.length&&this.score>=MILESTONES[this.ms]){
+    while(!this.vs&&this.ms<MILESTONES.length&&this.score>=MILESTONES[this.ms]){
       this.toast(MILESTONES[this.ms].toLocaleString()+' POINTS',P.cold); this.shake=Math.max(this.shake,5); Sfx.milestone(); this.ms++;
     }
     // explosion size / warmth by type
@@ -887,43 +911,47 @@ class World{
     e.type==='tank'?Sfx.boomBig():Sfx.boom();
   }
 
+  nearest(x,y){ let best=this.players[0],bd=1e9; for(const p of this.players){ if(p.dead) continue; const d=(p.x-x)**2+(p.y-y)**2; if(d<bd){ bd=d; best=p; } } return best; }
+  allDead(){ return this.players.every(p=>p.dead); }
+  tag(p){ return this.two?'P'+(p.id+1)+' ':''; }
   maybeDrop(e){
     this.sinceDrop++;
     if(this.time-this.lastDrop<7||this.powerups.length>=2) return;     // spacing cap
     const base={scout:.03,fighter:.07,tank:.18,elite:.3}[e.type]||.05;
     if(Math.random()>=base+Math.max(0,this.sinceDrop-12)*0.04) return; // pity ramp after 12 dry kills
-    const pl=this.player, act=k=>pl.pw[k]>0;
+    const act=k=>this.players.some(p=>p.pw[k]>0), lv=this.vs?Math.min(...this.players.map(p=>p.lives)):this.lives;
     const w={rapid:act('rapid')?.8:3, triple:act('triple')?.8:3, shield:act('shield')?0:2.5,
-             health:this.lives>=MAX_LIVES?0:({1:5,2:3,3:1.2,4:.6})[this.lives]||1};
+             health:lv>=MAX_LIVES?0:({1:5,2:3,3:1.2,4:.6})[lv]||1};
     let r=Math.random()*Object.values(w).reduce((a,b)=>a+b,0),kind='rapid';
     for(const k in w){ if((r-=w[k])<=0){kind=k;break;} }
     this.powerups.push(new Powerup(kind,clamp(e.x,30,W-30),e.y));
     this.sinceDrop=0; this.lastDrop=this.time;
   }
-  collect(pu){
-    pu.dead=true; const d=PW[pu.kind], p=this.player;
+  collect(pu,p){
+    pu.dead=true; const d=PW[pu.kind];
     this.flashes.push(new Ring(pu.x,pu.y,d.col,46));
-    this.burst(pu.x,pu.y,d.col,10); this.toast(d.name,d.col);
-    if(pu.kind==='health'){ this.lives=Math.min(MAX_LIVES,this.lives+1); Sfx.heal(); }
+    this.burst(pu.x,pu.y,d.col,10); this.toast(this.tag(p)+d.name,d.col);
+    if(pu.kind==='health'){ const S=this.vs?p:this; S.lives=Math.min(MAX_LIVES,S.lives+1); Sfx.heal(); }
     else{ p.pw[pu.kind]=d.dur; pu.kind==='shield'?Sfx.shieldUp():Sfx.pick(); }   // refreshes, never stacks past one timer
   }
-  expire(k){
-    this.toast(PW[k].name+' ENDED',P.steel); Sfx.expire();
-    this.flashes.push(new Ring(this.player.x,this.player.y,PW[k].col,40));
+  expire(k,p){
+    this.toast(this.tag(p)+PW[k].name+' ENDED',P.steel); Sfx.expire();
+    this.flashes.push(new Ring(p.x,p.y,PW[k].col,40));
   }
 
-  hurt(){
-    const p=this.player; if(p.inv>0)return;
+  hurt(p){
+    if(p.inv>0||p.dead)return;
     if(p.pw.shield>0){   // shield absorbs one hit, keeps combo
       p.pw.shield=0; p.inv=0.9; this.shake=7;
       this.flashes.push(new Ring(p.x,p.y,PW.shield.col,56));
-      this.sparkAt(p.x,p.y,PW.shield.col,16); this.toast('SHIELD BROKEN',PW.shield.col); Sfx.shieldBreak(); return;
+      this.sparkAt(p.x,p.y,PW.shield.col,16); this.toast(this.tag(p)+'SHIELD BROKEN',PW.shield.col); Sfx.shieldBreak(); return;
     }
-    this.lives--; this.shake=14; this.combo=0; this.comboT=0; this.mult=1; this.flawless=false; this.hurtAlpha=0.58;
-    this.burst(p.x,p.y,'#6fa3ff',22);
-    this.sparkAt(p.x,p.y,P.blueGl,18);
+    const S=this.vs?p:this;
+    S.lives--; this.shake=14; S.combo=0; S.comboT=0; S.mult=1; S.flawless=false; this.hurtAlpha=0.58;
+    this.burst(p.x,p.y,p.glow,22);
+    this.sparkAt(p.x,p.y,p.glow,18);
     Sfx.hurt(); try{ navigator.vibrate&&navigator.vibrate(40); }catch(e){}
-    if(this.lives<=0){ p.dead=true; Sfx.gameOver(); } else p.inv=CFG.invuln;
+    if(S.lives<=0){ for(const q of this.players) q.dead=true; Sfx.gameOver(); }   // VS: first elimination ends the match else p.inv=CFG.invuln;
   }
 
   collide(){
@@ -931,22 +959,26 @@ class World{
       for(const e of this.enemies){
         if(b.dead||e.dead||!hit(b,e))continue;
         b.dead=true; e.hp--; e.flash=0.1; e.hitReaction();
-        if(e.hp<=0) this.kill(e);
+        if(e.hp<=0) this.kill(e,this.players[b.owner]);
         else{ this.sparkAt(b.x,b.y,e.glowCol,5); Sfx.hitEnemy(); }
       }
-    const p=this.player; if(p.inv>0)return;
-    // graze: near-miss refreshes combo and pays a small bonus (risk/reward)
-    for(const b of this.enemyBullets) if(!b.grazed&&!hit(b,p)){
-      const dx=b.x-p.x,dy=b.y-p.y,gr=p.r+b.r+14;
-      if(dx*dx+dy*dy<gr*gr){
-        b.grazed=true; if(this.combo>0) this.comboT=COMBO_WIN;
-        const pts=25*this.mult; this.score+=pts;
-        this.sparkAt(p.x,p.y,P.goldGl,4); this.pops.push(new ScorePop(p.x,p.y-24,pts));
+    for(const p of this.players){
+      if(p.dead||p.inv>0) continue;
+      // graze: near-miss refreshes combo and pays a small bonus (risk/reward)
+      for(const b of this.enemyBullets) if(!b.grazed&&!hit(b,p)){
+        const dx=b.x-p.x,dy=b.y-p.y,gr=p.r+b.r+14;
+        if(dx*dx+dy*dy<gr*gr){
+          const S=this.vs?p:this; b.grazed=true; if(S.combo>0) S.comboT=COMBO_WIN;
+          const pts=25*S.mult; S.score+=pts;
+          this.sparkAt(p.x,p.y,P.goldGl,4); this.pops.push(new ScorePop(p.x,p.y-24,pts));
+        }
       }
-    }
-    for(const b of this.enemyBullets) if(hit(b,p)){ b.dead=true; this.hurt(); return; }
-    for(const e of this.enemies) if(!e.dead&&hit(e,p)){      // ramming hurts both sides; it is not a free kill
-      e.hp-=3; e.flash=0.1; if(e.hp<=0) this.kill(e); this.hurt(); return;
+      let struck=false;
+      for(const b of this.enemyBullets) if(!b.dead&&hit(b,p)){ b.dead=true; this.hurt(p); struck=true; break; }
+      if(struck) continue;
+      for(const e of this.enemies) if(!e.dead&&hit(e,p)){      // ramming hurts both sides; it is not a free kill
+        e.hp-=3; e.flash=0.1; if(e.hp<=0) this.kill(e,p); this.hurt(p); break;
+      }
     }
   }
 
@@ -955,17 +987,20 @@ class World{
     this.banner=Math.max(0,this.banner-dt);
     this.shake=Math.max(0,this.shake-dt*35);
     this.hurtAlpha=Math.max(0,this.hurtAlpha-dt*2.8);
-    if(!this.player.dead) for(const k in this.player.pw) if(this.player.pw[k]>0){
-      this.player.pw[k]-=dt; if(this.player.pw[k]<=0){ this.player.pw[k]=0; this.expire(k); }
-    }
-    if(this.combo>0){ this.comboT-=dt; if(this.comboT<=0){ this.combo=0; this.mult=1; } }
+    for(const S of this.vs?this.players:[this]) if(S.combo>0){ S.comboT-=dt; if(S.comboT<=0){ S.combo=0; S.mult=1; } }
     for(const t of this.toasts) t.life-=dt;
     this.toasts=this.toasts.filter(t=>t.life>0);
-    if(this.player.dead) this.overT+=dt; else this.player.update(dt,this);
+    let alive=0;
+    for(const p of this.players){
+      if(p.dead) continue; alive++;
+      for(const k in p.pw) if(p.pw[k]>0){ p.pw[k]-=dt; if(p.pw[k]<=0){ p.pw[k]=0; this.expire(k,p); } }
+      p.update(dt,this);
+    }
+    if(!alive) this.overT+=dt;
     this.updateWaves(dt);
     for(const list of [this.bullets,this.enemyBullets,this.enemies,this.particles,this.sparks,this.flashes,this.pops,this.powerups])
       for(const o of list) o.update(dt,this);
-    if(!this.player.dead) this.collide();
+    if(alive) this.collide();
     for(const k of ['bullets','enemyBullets','enemies','particles','sparks','flashes','pops','powerups'])
       compact(this[k],k==='particles'?POOL.p:k==='sparks'?POOL.s:null);
   }
@@ -980,9 +1015,9 @@ class World{
     for(const u of this.powerups)     u.draw(g);
     for(const b of this.bullets)      b.draw(g);
     for(const b of this.enemyBullets) b.draw(g);
-    if(!this.player.dead){
-      this.player.draw(g,this.time);
-      const p=this.player, blink=k=>p.pw[k]>2||Math.floor(this.time*10)%2;
+    for(const p of this.players) if(!p.dead){
+      p.draw(g,this.time);
+      const blink=k=>p.pw[k]>2||Math.floor(this.time*10)%2;
       if(p.pw.shield>0&&blink('shield')){
         g.globalAlpha=0.55+0.25*Math.sin(this.time*8);
         withGlow(g,PW.shield.col,14,()=>{g.strokeStyle=PW.shield.col;g.lineWidth=2;g.beginPath();g.arc(p.x,p.y-2,25,0,6.283);g.stroke();});
@@ -1012,9 +1047,16 @@ class World{
 
   _drawHud(g){
     g.fillStyle='rgba(138,168,196,0.18)'; g.fillRect(0,44,W,1);
-    txt(g,String(this.score).padStart(7,'0'),16,33,18,P.cold,'left','500');
+    if(this.vs){
+      txt(g,String(this.players[0].score).padStart(7,'0'),16,33,18,P.blueGl,'left','600');
+      txt(g,String(this.players[1].score).padStart(7,'0'),W-16,33,18,P.pinkGl,'right','600');
+    } else txt(g,String(this.score).padStart(7,'0'),16,33,18,P.cold,'left','500');
     if(this.wave>0) txt(g,`WAVE  ${this.wave}`,W/2,33,12,P.steel,'center','500');
-    for(let i=0;i<this.lives;i++){
+    if(this.vs) this.players.forEach((p,j)=>{ for(let i=0;i<p.lives;i++){
+      const cx=j?W-22-i*14:22+i*14;
+      withGlow(g,p.glow,6,()=>{ g.fillStyle=p.col; g.beginPath(); g.moveTo(cx,50); g.lineTo(cx+5,62); g.lineTo(cx,59); g.lineTo(cx-5,62); g.closePath(); g.fill(); });
+    } });
+    else for(let i=0;i<this.lives;i++){
       const cx=W-18-i*22;
       withGlow(g,P.blueGl,8,()=>{
         g.fillStyle=P.blue; g.beginPath();
@@ -1022,20 +1064,22 @@ class World{
         g.closePath(); g.fill();
       });
     }
-    if(this.combo>0){
-      txt(g,`COMBO ${this.combo}   x${this.mult}`,16,62,12,this.mult>1?P.goldGl:P.steel,'left','600');
-      g.fillStyle='rgba(138,168,196,0.2)'; g.fillRect(16,68,90,3);
-      g.fillStyle=P.gold; g.fillRect(16,68,90*clamp(this.comboT/COMBO_WIN,0,1),3);
+    for(const [S,x,al,y] of this.vs?[[this.players[0],16,'left',84],[this.players[1],W-16,'right',84]]:[[this,16,'left',62]]){
+      if(S.combo<=0) continue;
+      txt(g,`COMBO ${S.combo}   x${S.mult}`,x,y,12,S.mult>1?P.goldGl:P.steel,al,'600');
+      const bx=al==='left'?x:x-90; g.fillStyle='rgba(138,168,196,0.2)'; g.fillRect(bx,y+6,90,3);
+      g.fillStyle=P.gold; g.fillRect(bx,y+6,90*clamp(S.comboT/COMBO_WIN,0,1),3);
     }
-    let row=0;
-    for(const k of ['shield','rapid','triple']){
-      const t=this.player.pw[k]; if(!(t>0)) continue;
-      const y=66+row++*26, d=PW[k];
+    let rowL=0,rowR=0;
+    for(const p of this.players) for(const k of ['shield','rapid','triple']){
+      const t=p.pw[k]; if(!(t>0)) continue;
+      const left=this.vs&&p.id===0, y=(this.vs?108:66)+(left?rowL++:rowR++)*26, d=PW[k];
       g.globalAlpha=(t<2&&Math.floor(this.time*8)%2)?0.35:1;
-      g.save(); g.translate(W-22,y); glyph(g,k,d.col,7); g.restore();
-      txt(g,t.toFixed(1)+'s',W-38,y+4,11,d.col,'right','600');
-      g.fillStyle='rgba(138,168,196,0.2)'; g.fillRect(W-90,y+9,52,2);
-      g.fillStyle=d.col; g.fillRect(W-90,y+9,52*clamp(t/d.dur,0,1),2);
+      g.save(); g.translate(left?22:W-22,y); glyph(g,k,d.col,7); g.restore();
+      if(this.coop) txt(g,'P'+(p.id+1),W-96,y+4,11,p.glow,'right','700');
+      txt(g,t.toFixed(1)+'s',left?38:W-38,y+4,11,d.col,left?'left':'right','600');
+      g.fillStyle='rgba(138,168,196,0.2)'; g.fillRect(left?40:W-90,y+9,52,2);
+      g.fillStyle=d.col; g.fillRect(left?40:W-90,y+9,52*clamp(t/d.dur,0,1),2);
       g.globalAlpha=1;
     }
     this.toasts.forEach((t,i)=>{
@@ -1043,7 +1087,7 @@ class World{
       txt(g,t.s,W/2,H*0.22+i*22,14,t.col,'center','700');
     });
     g.globalAlpha=1;
-    if(this.banner>0&&!this.player.dead){
+    if(this.banner>0&&!this.allDead()){
       const fade=Math.min(1,this.banner)*Math.min(1,(2.4-this.banner)*3);
       g.globalAlpha=Math.max(0,fade);
       txt(g,`WAVE  ${this.bannerWave}`,W/2,H/2-10,38,P.cold,'center','700');
@@ -1061,7 +1105,7 @@ const UI={
   layout(key){
     const mk=(a,y0,st=52,w=232,h=42)=>a.map((r,i)=>({id:r[0],label:r[1],primary:!!r[2],x:(W-w)/2,y:y0+i*st,w,h}));
     switch(key){
-      case 'menu':     return mk([['play','PLAY',1],['how','HOW TO PLAY'],['scores','HIGH SCORE'],['settings','SETTINGS']],382);
+      case 'menu':     return mk([['play','PLAY',1]].concat(COARSE?[]:[['coop','CO-OP  ·  TEAM UP'],['vs','VERSUS  ·  1 v 1']],[['how','HOW TO PLAY'],['scores','HIGH SCORE'],['settings','SETTINGS']]),COARSE?382:340,COARSE?52:50);
       case 'how': return mk([['back','BACK']],616);
       case 'scores':   return Game.board.length?mk([['clear',Game.clearArm?'CONFIRM CLEAR':'CLEAR SCORES'],['back','BACK']],548):mk([['back','BACK']],616);
       case 'settings': return mk([['music','MUSIC   '+(Sfx.music?'ON':'OFF')],['sfx','SFX   '+(Sfx.sfx?'ON':'OFF')],
@@ -1074,7 +1118,10 @@ const UI={
   act(id,dir=0){
     const G=Game;
     switch(id){
-      case 'play': case 'restart': Sfx.ui('confirm'); G.sub=null; G._fadeTo('play'); break;
+      case 'play': G.mode='solo'; Sfx.ui('confirm'); G.sub=null; G._fadeTo('play'); break;
+      case 'coop': G.mode='coop'; Sfx.ui('confirm'); G.sub=null; G._fadeTo('play'); break;
+      case 'vs': G.mode='vs'; Sfx.ui('confirm'); G.sub=null; G._fadeTo('play'); break;
+      case 'restart': Sfx.ui('confirm'); G.sub=null; G._fadeTo('play'); break;
       case 'how': case 'scores': case 'settings': Sfx.ui('confirm'); G.sub=id; break;
       case 'back': this.back(); break;
       case 'resume': Sfx.ui('resume'); G.state='play'; break;
@@ -1100,7 +1147,7 @@ const UI={
 
 /* ─── game: state machine, screens, transitions ───────────────────────── */
 const Game={
-  state:'menu', sub:null, board:[], rank:0, lastEntry:null, clearArm:false, hiWave:0, hiCombo:0, newBest:false, world:null, stars:new Starfield(), time:0, hi:0,
+  state:'menu', sub:null, mode:'solo', winner:0, board:[], rank:0, lastEntry:null, clearArm:false, hiWave:0, hiCombo:0, newBest:false, world:null, stars:new Starfield(), time:0, hi:0,
   fadeAlpha:1, fadeDir:-1, _pendingState:null,
 
   init(){ try{ this.hi=+localStorage.getItem('n9-hi')||0; const b=JSON.parse(localStorage.getItem('n9-best')||'{}'); this.hiWave=b.w||0; this.hiCombo=b.c||0;
@@ -1112,16 +1159,20 @@ const Game={
     if(this._pendingState)return;
     this._pendingState=ns; this.fadeDir=1;
   },
-  start(){ Sfx.init(); this.world=new World(); this.state='play'; },
+  start(){ Sfx.init(); this.world=new World(this.mode); this.state='play'; },
   end(){
     const w=this.world; this.state='over';
+    if(w.vs){                                          // versus: highest score wins; not recorded on the leaderboard
+      const [a,b]=w.players; this.winner=a.score>b.score?1:b.score>a.score?2:0; this.rank=0; this.lastEntry=null; this.newBest=false;
+      announce(this.winner?'Player '+this.winner+' wins.':'Draw.'); return;
+    }
     announce('Game over. Score '+w.score+', wave '+w.wave+'.');
     this.newBest=w.score>0&&w.score>this.hi;
     if(w.score>this.hi) this.hi=w.score;
     this.hiWave=Math.max(this.hiWave,w.wave); this.hiCombo=Math.max(this.hiCombo,w.bestCombo);
     this.rank=0; this.lastEntry=null;
     if(w.score>0){                                   // local top-10, kept sorted, ties keep the older run first
-      const e={s:w.score,w:w.wave,c:w.bestCombo,d:new Date().toISOString().slice(0,10)};
+      const e={s:w.score,w:w.wave,c:w.bestCombo,d:new Date().toISOString().slice(0,10),p:this.mode==='coop'?2:1};
       this.board.push(e); this.board.sort((x,y)=>y.s-x.s); this.board.length=Math.min(this.board.length,10);
       const i=this.board.indexOf(e); if(i>=0){ this.rank=i+1; this.lastEntry=e; }
     }
@@ -1180,12 +1231,15 @@ const Game={
       hint('↑ ↓  SELECT  ·  ENTER  CONFIRM  ·  M  MUSIC  ·  N  SFX'+(FS.ok?'  ·  F  FULL':''));
     } else if(key==='how'){
       T('HOW TO PLAY',W/2,150,22,P.cold,'center','700'); rule(166,1);
-      (Input.touch.on?[['MOVE','LEFT THUMB'],['FIRE','RIGHT THUMB'],['PAUSE','TOP BUTTON'],['SOUND','SETTINGS']]:[['MOVE','WASD / ARROWS'],['FIRE','SPACE'],['PAUSE','P / ESC'],['MUSIC · SFX','M · N']].concat(FS.ok?[['FULLSCREEN','F']]:[],[['GAMEPAD','STICK · A · START']])).forEach((r,i)=>{
-        T(r[0],W/2-120,214+i*24,12,P.steel,'left','500',2+i); T(r[1],W/2+120,214+i*24,12,P.cold,'right','600',2+i); });
-      rule(342,5);
-      ['Chain kills to build a x2 to x8 multiplier.','Graze enemy fire to keep the combo alive.','Take a hit and the combo resets.'].forEach((s,i)=>T(s,W/2,372+i*22,12,P.steel,'center','500',6+i));
-      ['rapid','triple','shield','health'].forEach((k,i)=>{ const x=W/2-135+i*90,a=ap(9+i); g.globalAlpha=a; g.save(); g.translate(x,468); glyph(g,k,PW[k].col,9); g.restore(); g.globalAlpha=1; T(PW[k].name,x,496,10,PW[k].col,'center','600',9+i); });
-      T('Power-ups are temporary.',W/2,540,11,P.steel,'center','500',13);
+      const rows=Input.touch.on?[['MOVE','LEFT THUMB'],['FIRE','RIGHT THUMB'],['PAUSE','TOP BUTTON'],['SOUND','SETTINGS']]
+        :[['MOVE','WASD / ARROWS'],['FIRE','SPACE'],['PAUSE','P / ESC'],['SOUND · FULL','M · N · F'],['GAMEPAD','STICK · A · START']]
+          .concat(COARSE?[]:[['2P  ·  P1  (BLUE)','WASD · SPACE'],['2P  ·  P2  (PINK)','ARROWS · ENTER']]);
+      rows.forEach((r,i)=>{ T(r[0],W/2-130,214+i*22,12,P.steel,'left','500',2+i); T(r[1],W/2+130,214+i*22,12,P.cold,'right','600',2+i); });
+      const ry=214+rows.length*22; rule(ry,5);
+      ['Chain kills to build a x2 to x8 multiplier.','Graze enemy fire to keep the combo alive.','Take a hit and the combo resets.'].forEach((s,i)=>T(s,W/2,ry+30+i*22,12,P.steel,'center','500',6+i));
+      ['rapid','triple','shield','health'].forEach((k,i)=>{ const x=W/2-135+i*90,a=ap(9+i); g.globalAlpha=a; g.save(); g.translate(x,ry+126); glyph(g,k,PW[k].col,9); g.restore(); g.globalAlpha=1; T(PW[k].name,x,ry+154,10,PW[k].col,'center','600',9+i); });
+      T('Power-ups are temporary.',W/2,ry+198,11,P.steel,'center','500',13);
+      if(!COARSE) T('Versus: separate scores and lives. Highest score wins.',W/2,ry+222,11,P.steel,'center','500',14);
     } else if(key==='scores'){
       T('HIGH SCORES',W/2,150,22,P.cold,'center','700'); rule(166,1);
       if(!this.board.length) T('NO SCORES YET.  PLAY A RUN.',W/2,300,12,P.steel,'center','500',2);
@@ -1197,23 +1251,36 @@ const Game={
           if(me){ g.globalAlpha=0.12*ap(2); g.fillStyle=P.gold; g.fillRect(40,y-17,W-80,24); g.globalAlpha=1; }
           T(String(i+1),56,y,12,c,'left','600',n); T(String(e.s).padStart(7,'0'),176,y,13,c,'right','700',n);
           T(String(e.w),204,y,12,c,'left','600',n); T('x'+e.c,272,y,12,c,'left','600',n); T(e.d,W-56,y,11,P.steel,'right','500',n);
+          if(e.p===2) T('2P',330,y,11,P.pinkGl,'left','700',n);
         });
       }
     } else if(key==='settings'){
       T('SETTINGS',W/2,230,22,P.cold,'center','700'); rule(246,1); hint('← →  VOLUME     ESC  BACK');
     } else if(key==='pause'){
       T('PAUSED',W/2,230,30,P.cold,'center','700'); rule(248,1);
-      T('SCORE '+String(this.world.score).padStart(7,'0')+'   ·   WAVE '+this.world.wave,W/2,272,11,P.steel,'center','500',2);
+      T((this.world.vs?'P1 '+String(this.world.players[0].score).padStart(7,'0')+'   ·   P2 '+String(this.world.players[1].score).padStart(7,'0'):'SCORE '+String(this.world.score).padStart(7,'0'))+'   ·   WAVE '+this.world.wave,W/2,272,11,P.steel,'center','500',2);
       hint('ESC  RESUME');
     } else if(key==='over'){
-      const sc=Math.round(this.world.score*ease((t-0.3)/1.1));
-      T('MISSION FAILED',W/2,150,14,P.ember,'center','700',0); rule(166,1);
-      T(String(sc).padStart(7,'0'),W/2,236,52,P.cold,'center','700',1); T('FINAL SCORE',W/2,258,11,P.steel,'center','500',1);
-      if(this.rank&&t>1.2){ g.globalAlpha=0.6+0.4*Math.sin(t*6); txt(g,this.newBest?'↑  NEW HIGH SCORE':'↑  LEADERBOARD  #'+this.rank,W/2,288,12,P.goldGl,'center','700'); g.globalAlpha=1; }
-      rule(312,3);
-      [[this.hi,'HIGH SCORE',P.gold],[this.world.wave,'WAVE',P.cold],[this.world.bestCombo,'BEST COMBO',P.cold]].forEach((c,i)=>{
-        T(String(c[0]),W/2-130+i*130,372,22,c[2],'center','700',4+i); T(c[1],W/2-130+i*130,394,11,P.steel,'center','500',4+i); });
-      rule(420,7);
+      if(this.world.vs){
+        const [pa,pb]=this.world.players, win=this.winner;
+        T(win?'PLAYER '+win+' WINS':'DRAW',W/2,150,14,win===1?P.blueGl:win===2?P.pinkGl:P.cold,'center','700',0); rule(166,1);
+        [[pa,W/2-105,'PLAYER 1',1],[pb,W/2+105,'PLAYER 2',2]].forEach(([p,x,lab,id],i)=>{
+          const sc=Math.round(p.score*ease((t-0.3)/1.1)), c=id===1?P.blueGl:P.pinkGl;
+          T(String(sc).padStart(7,'0'),x,236,32,c,'center','700',1+i); T(lab+(win===id?'  ·  WINNER':''),x,258,11,win===id?P.goldGl:P.steel,'center','600',1+i); });
+        rule(312,3);
+        [[this.world.wave,'WAVE',P.cold],[pa.bestCombo,'P1 BEST COMBO',P.blueGl],[pb.bestCombo,'P2 BEST COMBO',P.pinkGl]].forEach((c,i)=>{
+          T(String(c[0]),W/2-130+i*130,372,22,c[2],'center','700',4+i); T(c[1],W/2-130+i*130,394,11,P.steel,'center','500',4+i); });
+        rule(420,7);
+      } else {
+        const sc=Math.round(this.world.score*ease((t-0.3)/1.1));
+        T('MISSION FAILED',W/2,150,14,P.ember,'center','700',0); rule(166,1);
+        T(String(sc).padStart(7,'0'),W/2,236,52,P.cold,'center','700',1); T('FINAL SCORE',W/2,258,11,P.steel,'center','500',1);
+        if(this.rank&&t>1.2){ g.globalAlpha=0.6+0.4*Math.sin(t*6); txt(g,this.newBest?'↑  NEW HIGH SCORE':'↑  LEADERBOARD  #'+this.rank,W/2,288,12,P.goldGl,'center','700'); g.globalAlpha=1; }
+        rule(312,3);
+        [[this.hi,'HIGH SCORE',P.gold],[this.world.wave,'WAVE',P.cold],[this.world.bestCombo,'BEST COMBO',P.cold]].forEach((c,i)=>{
+          T(String(c[0]),W/2-130+i*130,372,22,c[2],'center','700',4+i); T(c[1],W/2-130+i*130,394,11,P.steel,'center','500',4+i); });
+        rule(420,7);
+      }
     }
     L.forEach((b,i)=>this._btn(g,b,UI.anim[key+b.id]||{h:0,p:0},ap(2+i)));
   },
